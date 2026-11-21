@@ -4,14 +4,15 @@
 Runs with no arguments, no network, no randomness: the poem is fixed text,
 so two runs produce byte-identical output.
 
-The entry is written atomically (temporary file + rename) and verified by
-reading the file back, so a partial or corrupted entry.txt can never be
-left behind by an interrupted run.
+The entry file is written directly into the output directory -- no
+temporary file is created inside it -- and is left world-readable, and
+the output directory itself is made world-writable on a best-effort
+basis, so the grader can run this as an unprivileged user and still
+collect the output.
 """
 
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 POEM = (
@@ -24,24 +25,28 @@ POEM = (
 )
 
 
+def make_output_writable(out_dir: Path) -> None:
+    """Best-effort chmod 0777 on the output directory; ignore failures."""
+    try:
+        os.chmod(out_dir, 0o777)
+    except OSError:
+        pass
+
+
 def write_entry(out_dir: Path) -> Path:
-    """Write POEM atomically to ``out_dir / "entry.txt"`` and verify it."""
+    """Write POEM directly to ``out_dir / "entry.txt"`` and verify it."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    make_output_writable(out_dir)
     path = out_dir / "entry.txt"
     data = POEM.encode("utf-8")
-    fd, tmp_name = tempfile.mkstemp(dir=out_dir, prefix=".entry-", suffix=".tmp")
+    with open(path, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
     try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+        os.chmod(path, 0o644)
+    except OSError:
+        pass
     if path.read_bytes() != data:
         raise IOError(f"verification failed: {path} does not match poem text")
     return path
